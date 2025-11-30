@@ -10,7 +10,9 @@ dependencies = [
     "matplotlib>=3.10.7",
     "plotly>=6.3.1",
     "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
     "statsmodels>=0.14.5",
+    "sympy>=1.14.0",
     "xgboost>=3.1.0",
     "yfinance>=0.2.66",
 ]
