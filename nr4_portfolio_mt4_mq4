@@ -1,0 +1,247 @@
+//+------------------------------------------------------------------+
+//|                                           NR4_Portfolio_MT4.mq4 |
+//|                   Multi-Currency NR4 Portfolio (MT4 Version)     |
+//|                                      Copyright 2025, Risk Analyst |
+//+------------------------------------------------------------------+
+#property copyright "Risk Analyst"
+#property version   "1.00"
+#property strict
+
+// --- INPUTS ---
+input string   TradePairs     = "GBPJPY,USDJPY,EURJPY"; // Comma-separated list
+input double   LevPerPair     = 1.33;     // Leverage per Pair
+input double   ATR_Multiplier = 3.0;      // Stop Loss (x ATR)
+input int      HoldDays       = 1;        // Days to Hold
+input int      MagicNumber    = 888888;   // Portfolio Magic ID
+input int      StartHour      = 0;        // Hour to Start Scanning (Server Time) - Not strictly used in logic but kept for consistency
+input int      CloseHour      = 23;       // Hour to Force Close (Server Time)
+input int      Slippage       = 3;        // Slippage in Pips
+
+// --- GLOBALS ---
+string         symbols[];
+datetime       lastProcessedDay = 0;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   // Parse the comma-separated string into an array
+   string sep = ",";
+   ushort u_sep = StringGetCharacter(sep, 0);
+   int total = StringSplit(TradePairs, u_sep, symbols);
+   
+   if(total == 0) 
+     {
+      ArrayResize(symbols, 1);
+      symbols[0] = Symbol(); // Default to current chart if empty
+     }
+
+   // Clean up symbol names (remove spaces)
+   for(int i=0; i<ArraySize(symbols); i++)
+     {
+      string s = symbols[i];
+      StringTrimLeft(s);
+      StringTrimRight(s);
+      symbols[i] = s;
+      
+      // Safety Check: Is symbol available?
+      if(MarketInfo(symbols[i], MODE_BID) == 0)
+         Print("Warning: Symbol ", symbols[i], " not found in Market Watch.");
+     }
+
+   return(INIT_SUCCEEDED);
+  }
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+  }
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   // 1. Check Time Exit constantly (every tick)
+   CheckTimeExits();
+
+   // 2. Entry Logic: Only run once per day
+   // Use the first symbol as the master clock for "New Day" check
+   // If portfolio is empty, use current chart symbol
+   string masterSymbol = (ArraySize(symbols) > 0) ? symbols[0] : Symbol();
+   
+   datetime currentDay = iTime(masterSymbol, PERIOD_D1, 0); 
+   
+   if(currentDay == lastProcessedDay) return; 
+   
+   lastProcessedDay = currentDay;
+   
+   // Loop through portfolio
+   for(int i=0; i<ArraySize(symbols); i++)
+     {
+      string sym = symbols[i];
+      // Close old pending orders
+      DeletePendingOrders(sym);
+      // Scan for new setups
+      ProcessStrategy(sym);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Core Strategy Logic                                              |
+//+------------------------------------------------------------------+
+void ProcessStrategy(string sym)
+  {
+   // Safety: Check if symbol data is available
+   if(iBars(sym, PERIOD_D1) < 20) return;
+
+   // NR4 Check using iHigh/iLow directly (Index 1 = Yesterday)
+   double h1 = iHigh(sym, PERIOD_D1, 1);
+   double l1 = iLow(sym, PERIOD_D1, 1);
+   double r1 = h1 - l1;
+
+   double r2 = iHigh(sym, PERIOD_D1, 2) - iLow(sym, PERIOD_D1, 2);
+   double r3 = iHigh(sym, PERIOD_D1, 3) - iLow(sym, PERIOD_D1, 3);
+   double r4 = iHigh(sym, PERIOD_D1, 4) - iLow(sym, PERIOD_D1, 4);
+   
+   if(r1 < r2 && r1 < r3 && r1 < r4)
+     {
+      Print("NR4 Pattern Detected on ", sym);
+      
+      // Calculate Levels
+      double point = MarketInfo(sym, MODE_POINT);
+      // Adjust point for 3/5 digit brokers if necessary, usually auto-handled but good to be safe
+      if(point == 0.00001) point = 0.0001; 
+      if(point == 0.001) point = 0.01;
+
+      // 20 points buffer (2 pips usually)
+      double buffer = 20 * point; 
+
+      double buyTrigger = h1 + buffer; 
+      double sellTrigger = l1 - buffer;
+      
+      // Get ATR
+      double atr = iATR(sym, PERIOD_D1, 14, 1);
+      double stopDist = atr * ATR_Multiplier;
+      
+      // Calculate Lots
+      double vol = CalculateLotSize(sym);
+      
+      if(vol > 0)
+        {
+         // Calculate Expiration (End of Today)
+         // In MT4, expiration must be > 10 minutes from now. 
+         // We set it to 23:59 of the current day.
+         datetime dayEnd = iTime(sym, PERIOD_D1, 0) + 86400 - 60; 
+         
+         // Send Orders
+         // Buy Stop
+         int ticket1 = OrderSend(sym, OP_BUYSTOP, vol, buyTrigger, Slippage, buyTrigger - stopDist, 0, "NR4 Buy", MagicNumber, dayEnd, clrBlue);
+         if(ticket1 < 0) Print("BuyStop Error on ", sym, ": ", GetLastError());
+         
+         // Sell Stop
+         int ticket2 = OrderSend(sym, OP_SELLSTOP, vol, sellTrigger, Slippage, sellTrigger + stopDist, 0, "NR4 Sell", MagicNumber, dayEnd, clrRed);
+         if(ticket2 < 0) Print("SellStop Error on ", sym, ": ", GetLastError());
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Close trades at End of Day                                       |
+//+------------------------------------------------------------------+
+void CheckTimeExits()
+  {
+   for(int i=OrdersTotal()-1; i>=0; i--)
+     {
+      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+        {
+         if(OrderMagicNumber() == MagicNumber)
+           {
+            // Only check Open Positions (OP_BUY or OP_SELL), not pending
+            if(OrderType() == OP_BUY || OrderType() == OP_SELL)
+              {
+               datetime openTime = OrderOpenTime();
+               datetime currentTime = TimeCurrent();
+               
+               // Calculate days elapsed
+               double secondsElapsed = currentTime - openTime;
+               double daysElapsed = secondsElapsed / 86400.0;
+               
+               int currentHour = TimeHour(currentTime);
+               
+               // Check condition: Held for HoldDays AND it's the CloseHour
+               if(daysElapsed >= HoldDays - 0.5 && currentHour >= CloseHour)
+                 {
+                  bool res = false;
+                  double closePrice = 0;
+                  
+                  if(OrderType() == OP_BUY)
+                     closePrice = MarketInfo(OrderSymbol(), MODE_BID);
+                  else
+                     closePrice = MarketInfo(OrderSymbol(), MODE_ASK);
+                     
+                  res = OrderClose(OrderTicket(), OrderLots(), closePrice, Slippage, clrNONE);
+                     
+                  if(!res) Print("Close Error: ", GetLastError());
+                 }
+              }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Delete Pending Orders                                            |
+//+------------------------------------------------------------------+
+void DeletePendingOrders(string sym)
+  {
+   for(int i=OrdersTotal()-1; i>=0; i--)
+     {
+      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+        {
+         if(OrderSymbol() == sym && OrderMagicNumber() == MagicNumber)
+           {
+            if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP)
+              {
+               bool res = OrderDelete(OrderTicket());
+               if(!res) Print("Delete Error: ", GetLastError());
+              }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Lot Size Calculation                                             |
+//+------------------------------------------------------------------+
+double CalculateLotSize(string sym)
+  {
+   double equity = AccountEquity();
+   double targetExposure = equity * LevPerPair; 
+   
+   double contractSize = MarketInfo(sym, MODE_LOTSIZE); 
+   if(contractSize == 0) contractSize = 100000; // Default safety
+   
+   // This is a simplified calculation assuming base currency conversion is close to 1
+   // For accurate multi-currency sizing, you'd need MarketInfo(sym, MODE_TICKVALUE) logic,
+   // but this matches your Python approximation logic.
+   double vol = targetExposure / contractSize; 
+   
+   // Normalize volume
+   double step = MarketInfo(sym, MODE_LOTSTEP);
+   double min = MarketInfo(sym, MODE_MINLOT);
+   double max = MarketInfo(sym, MODE_MAXLOT);
+   
+   // Round to step
+   if(step > 0)
+      vol = MathFloor(vol / step) * step;
+   
+   if(vol < min) vol = min;
+   if(vol > max) vol = max;
+   
+   return vol;
+  }
+//+------------------------------------------------------------------+
