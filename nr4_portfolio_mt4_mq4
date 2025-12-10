@@ -9,7 +9,7 @@
 
 // --- INPUTS ---
 input string   TradePairs     = "GBPJPY,USDJPY,EURJPY"; // Comma-separated list
-input double   LevPerPair     = 1.33;     // Leverage per Pair
+input double   TotalLeverage     = 1.33;     // Leverage per Pair
 input double   ATR_Multiplier = 3.0;      // Stop Loss (x ATR)
 input int      HoldDays       = 1;        // Days to Hold
 input int      MagicNumber    = 888888;   // Portfolio Magic ID
@@ -220,7 +220,8 @@ void DeletePendingOrders(string sym)
 double CalculateLotSize(string sym)
   {
    double equity = AccountEquity();
-   double targetExposure = equity * LevPerPair; 
+   int length = ArraySize(symbols);
+   double targetExposure = equity * TotalLeverage / length; 
    
    double contractSize = MarketInfo(sym, MODE_LOTSIZE); 
    if(contractSize == 0) contractSize = 100000; // Default safety
