@@ -31,8 +31,8 @@ TRADE_PAIRS = ["GBP_JPY", "USD_JPY", "EUR_JPY"]
 LEV_PER_PAIR = 1.33
 ATR_MULTIPLIER = 5.0
 CLOSE_HOUR = 23  # 23:00 UTC: Exit Time
-START_STREAM_HOUR = 23  # 23:59 UTC: Start waiting for new day
-START_STREAM_MINUTE = 59
+START_STREAM_HOUR = 23  # 23:55 UTC: Start waiting for new day
+START_STREAM_MINUTE = 55
 
 # --- 3. GLOBALS ---
 API = oandapyV20.API(access_token=ACCESS_TOKEN)
@@ -43,7 +43,7 @@ pending_orders_deleted_today = False
 
 def get_current_gtd_time():
     """Calculates Good-Til-Date (23:59:59 UTC)."""
-    now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
+    now_utc = datetime.now(pytz.utc).replace(tzinfo=pytz.utc)
     day_end = now_utc.replace(hour=23, minute=59, second=59, microsecond=0)
     if now_utc.hour >= 23:
         day_end += timedelta(days=1)
@@ -180,7 +180,7 @@ def task_process_nr4(sym):
 def check_time_exits():
     """Manages 23:00 UTC cleanup with MAX CONCURRENCY."""
     global pending_orders_deleted_today
-    now = datetime.utcnow()
+    now = datetime.now(pytz.utc)
 
     if now.hour < CLOSE_HOUR:
         return
@@ -220,10 +220,9 @@ def run_daily_entry_logic():
     print("[DAILY SCAN COMPLETE]")
 
 
-def wait_for_new_day_via_stream():
+def wait_for_new_day_via_stream(target_date_str):
     """Blocks until the first tick of the next UTC day."""
-    target_date = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
-    print(f"\n[STREAM] Waiting for first tick of {target_date}...")
+    print(f"\n[STREAM] Current datetime:{datetime.now(pytz.utc)} Waiting for first tick of {target_date_str}...")
 
     # Stream one pair to act as the clock
     r = pricing.PricingStream(
@@ -233,7 +232,7 @@ def wait_for_new_day_via_stream():
         for tick in API.request(r):
             if tick.get("type") == "PRICE":
                 tick_date = tick.get("time", "").split("T")[0]
-                if tick_date == target_date:
+                if tick_date == target_date_str:
                     r.terminate("New day")
                     return True
     except Exception as e:
@@ -253,15 +252,17 @@ def continuous_monitor():
 
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(pytz.utc)
 
-            # 1. EXIT LOGIC (Runs 23:00 - 23:59 UTC)
+            # 1. EXIT LOGIC (Runs 23:00 - 23:55 UTC)
             check_time_exits()
 
-            # 2. ENTRY LOGIC (Triggers exactly at 23:59 UTC)
+            # 2. ENTRY LOGIC (Triggers exactly at 23:55 UTC)
             if now.hour == START_STREAM_HOUR and now.minute == START_STREAM_MINUTE:
+                tomorrow_date_obj = now + timedelta(days=1)
+                target_date_str = tomorrow_date_obj.strftime('%Y-%m-%d')
                 # Wait for 00:00:00 tick
-                if wait_for_new_day_via_stream():
+                if wait_for_new_day_via_stream(target_date_str):
                     # Run Strategy in Parallel
                     run_daily_entry_logic()
 
@@ -269,8 +270,8 @@ def continuous_monitor():
                     pending_orders_deleted_today = False
 
                     # Sleep 5 mins to jump past the trigger window
-                    print("Entry complete. Sleeping for 5 minutes...")
-                    time.sleep(300)
+                    print("Entry complete. Sleeping for 10 minutes...")
+                    time.sleep(600)
 
             # 3. Idle Sleep
             time.sleep(60)
