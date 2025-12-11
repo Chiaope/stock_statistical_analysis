@@ -11,11 +11,13 @@
 
 // --- INPUTS ---
 input string   TradePairs     = "GBPJPY,USDJPY,EURJPY"; 
-input double   TotalLeverage     = 1.33;     
-input double   ATR_Multiplier = 3.0;      
+input double   TotalLeverage  = 6.0;     
+input double   ATR_Multiplier = 5.0;      
 input int      HoldDays       = 1;        
 input int      MagicNumber    = 888888;   
 input int      CloseHour      = 23;       // Hour to Force Close (Server Time)
+input int      CloseMinute    = 55;       // Minute to Force Close (Server Time)
+input int      PipsBuffer     = 20;       
 
 // --- GLOBALS ---
 CTrade         trade;
@@ -94,8 +96,13 @@ void CheckTimeExits()
             TimeToStruct(currentTime, dt);
             
             // If we are in the target Hold Day (or later) AND it is the closing hour
-            if(daysElapsed >= HoldDays - 0.5 && dt.hour >= CloseHour)
+            if(daysElapsed >= HoldDays - 0.5 && dt.hour >= CloseHour && dt.min >= CloseMinute)
               {
+               for(int i=0; i<ArraySize(symbols); i++)
+                 {
+                   string sym = symbols[i];
+                   DeleteOrders(sym);
+                 }
                trade.PositionClose(ticket);
               }
            }
@@ -122,8 +129,9 @@ void ProcessStrategy(string sym, int handle)
    if(r1 < r2 && r1 < r3 && r1 < r4)
      {
       double point = SymbolInfoDouble(sym, SYMBOL_POINT);
-      double buyTrigger = high[0] + (20 * point); 
-      double sellTrigger = low[0] - (20 * point);
+      double buffer = PipsBuffer * point;
+      double buyTrigger = high[0] + buffer; 
+      double sellTrigger = low[0] - buffer;
       
       double atr[];
       ArraySetAsSeries(atr, true);
@@ -139,7 +147,7 @@ void ProcessStrategy(string sym, int handle)
          datetime dayEnd = iTime(sym, PERIOD_D1, 0) + (24*60*60) - 60; // 23:59 tonight
          
          trade.BuyStop(vol, buyTrigger, sym, buyTrigger-stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd);
-         trade.SellStop(vol, sellTrigger, sym, sellTrigger+stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd);
+         // trade.SellStop(vol, sellTrigger, sym, sellTrigger+stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd);
         }
      }
   }
