@@ -12,6 +12,7 @@ input double   LevPerPair     = 2;     // Leverage Allocation per Pair
 input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input int      HoldDays       = 1;        // Days to Hold
 input int      MagicNumber    = 888888;   // Unique ID for this Strategy
+input int      StartHour      = 0;
 input int      CloseHour      = 23;       // Server Hour to Close Trades
 input int      CloseMinute      = 55;       // Server Minute to Close Trades
 input int      PipsBuffer       = 20;        // Slippage in Pips
@@ -27,6 +28,7 @@ string         mySymbol;
 int OnInit()
   {
    mySymbol = Symbol(); // Get the chart symbol
+   lastProcessedDay = iTime(mySymbol, PERIOD_D1, 0);
    
    // Validate Data availability
    if(iBars(mySymbol, PERIOD_D1) < 100)
@@ -51,11 +53,13 @@ void OnTick()
   {
    // 1. Check Time Exit (Run continuously to catch the exact hour)
    CheckTimeExits();
+   datetime currentTime = TimeCurrent();
+   int currentHour = TimeHour(currentTime);
 
    // 2. Entry Logic: Run ONLY when a new Daily Bar appears
    datetime currentBarDate = iTime(mySymbol, PERIOD_D1, 0);
    
-   if(currentBarDate != lastProcessedDay)
+   if(currentBarDate != lastProcessedDay && currentHour >= StartHour)
      {
       // New Day Detected!
       
@@ -157,7 +161,7 @@ void CheckTimeExits()
                int currentMinute = TimeMinute(currentTime);
                
                // Exit Rule: Held for ~1 day AND current hour matches CloseHour
-               if(daysElapsed >= 0.5 && currentHour >= CloseHour && currentMinute >= CloseMinute)
+               if(daysElapsed >= HoldDays - 0.5 && currentHour >= CloseHour && currentMinute >= CloseMinute)
                  {
                   bool res = false;
                   double closePrice = 0;

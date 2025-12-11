@@ -15,6 +15,7 @@ input double   LevPerPair     = 2.0;      // Leverage Allocation for THIS pair (
 input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input int      HoldDays       = 1;        // Days to Hold
 input int      MagicNumber    = 888888;   // Unique ID
+input int      StartHour      = 0;        // Server Hour to Start
 input int      CloseHour      = 23;       // Server Hour to Force Close (Exit Only)
 input int      CloseMinute    = 55;       // Server Minute to Force Close (Exit Only)
 input int      PipsBuffer     = 20;       // Pips buffer
@@ -28,6 +29,7 @@ int            atrHandle;
 int OnInit()
   {
    mySymbol = _Symbol; // Automatically use the symbol of the chart the EA is on
+   lastProcessedDay = iTime(mySymbol, PERIOD_D1, 0);
    
    // Create ATR Handle
    atrHandle = iATR(mySymbol, PERIOD_D1, 14);
@@ -58,9 +60,11 @@ void OnTick()
    // This replaces the StartHour check with the robust New Bar check
 
    datetime currentBarDate = iTime(mySymbol, PERIOD_D1, 0);
-   
+   datetime currentTime = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
    // If the bar time has changed, it's a new day
-   if(currentBarDate != lastProcessedDay)
+   if(currentBarDate != lastProcessedDay && dt.hour >= StartHour)
      {
       // Clean slate first
       DeletePendingOrders();
