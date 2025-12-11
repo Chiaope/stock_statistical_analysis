@@ -90,7 +90,7 @@ void ProcessStrategy()
    double r2 = high[1] - low[1];
    double r3 = high[2] - low[2];
    double r4 = high[3] - low[3];
-   
+
    // NR4 Logic
    if(r1 < r2 && r1 < r3 && r1 < r4)
      {
