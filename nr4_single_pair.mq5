@@ -16,6 +16,7 @@ input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input int      HoldDays       = 1;        // Days to Hold
 input int      MagicNumber    = 888888;   // Unique ID
 input int      StartHour      = 0;        // Server Hour to Start
+input int      StartMinute    = 5;        // Server Minute to Start
 input int      CloseHour      = 23;       // Server Hour to Force Close (Exit Only)
 input int      CloseMinute    = 55;       // Server Minute to Force Close (Exit Only)
 input int      PipsBuffer     = 20;       // Pips buffer
@@ -64,7 +65,7 @@ void OnTick()
    MqlDateTime dt;
    TimeToStruct(currentTime, dt);
    // If the bar time has changed, it's a new day
-   if(currentBarDate != lastProcessedDay && dt.hour >= StartHour)
+   if(currentBarDate != lastProcessedDay && dt.hour >= StartHour && dt.min >= StartMinute)
      {
       // Clean slate first
       DeletePendingOrders();

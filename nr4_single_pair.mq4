@@ -13,6 +13,7 @@ input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input int      HoldDays       = 1;        // Days to Hold
 input int      MagicNumber    = 888888;   // Unique ID for this Strategy
 input int      StartHour      = 0;
+input int      StartMinute      = 5;
 input int      CloseHour      = 23;       // Server Hour to Close Trades
 input int      CloseMinute      = 55;       // Server Minute to Close Trades
 input int      PipsBuffer       = 20;        // Slippage in Pips
@@ -55,11 +56,12 @@ void OnTick()
    CheckTimeExits();
    datetime currentTime = TimeCurrent();
    int currentHour = TimeHour(currentTime);
+   int currentMinute = TimeMinute(currentTime);
 
    // 2. Entry Logic: Run ONLY when a new Daily Bar appears
    datetime currentBarDate = iTime(mySymbol, PERIOD_D1, 0);
    
-   if(currentBarDate != lastProcessedDay && currentHour >= StartHour)
+   if(currentBarDate != lastProcessedDay && currentHour >= StartHour && currentMinute >= StartMinute)
      {
       // New Day Detected!
       
