@@ -13,7 +13,6 @@ import oandapyV20.endpoints.instruments as instruments
 import oandapyV20.endpoints.orders as orders
 import oandapyV20.endpoints.positions as positions
 import oandapyV20.endpoints.accounts as accounts
-import oandapyV20.endpoints.pricing as pricing
 
 # --- 1. SETUP ---
 warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -30,9 +29,8 @@ if not ACCESS_TOKEN or not ACCOUNT_ID:
 TRADE_PAIRS = ["GBP_JPY", "USD_JPY", "EUR_JPY"]
 LEV_PER_PAIR = 1.33
 ATR_MULTIPLIER = 5.0
-CLOSE_HOUR = 23  # 23:00 UTC: Exit Time
-START_STREAM_HOUR = 23  # 23:55 UTC: Start waiting for new day
-START_STREAM_MINUTE = 55
+START_STREAM_HOUR = 22
+last_process_day = datetime.now(pytz.utc).date()
 
 # --- 3. GLOBALS ---
 API = oandapyV20.API(access_token=ACCESS_TOKEN)
@@ -43,26 +41,27 @@ pending_orders_deleted_today = False
 
 def get_current_gtd_time():
     """Calculates Good-Til-Date (23:59:59 UTC)."""
-    now_utc = datetime.now(pytz.utc).replace(tzinfo=pytz.utc)
-    day_end = now_utc.replace(hour=23, minute=59, second=59, microsecond=0)
-    if now_utc.hour >= 23:
-        day_end += timedelta(days=1)
+    now_utc = datetime.now(pytz.utc)
+
+    # If we are generating this at 22:00 or later, we want the order
+    # to expire at the END of the NEXT day (or current trading session).
+    if now_utc.hour >= 22:
+        target_date = now_utc + timedelta(days=1)
+    else:
+        target_date = now_utc
+
+    day_end = target_date.replace(hour=23, minute=59, second=59, microsecond=0)
     return day_end.isoformat().split("+")[0] + ".000000000Z"
 
 
-def calculate_lot_size(sym):
-    try:
-        r = accounts.AccountSummary(ACCOUNT_ID)
-        API.request(r)
-        equity = float(r.response["account"]["NAV"])
-        vol = round((equity * LEV_PER_PAIR) * 0.1)
-        return int(max(vol, 100))
-    except Exception as e:
-        print(f"  [{sym}] Error calculating lot size: {e}")
-        return 0
+def calculate_lot_size_from_equity(equity):
+    # Pure math, no API calls here
+    vol = round((equity * LEV_PER_PAIR) * 0.1)
+    return int(max(vol, 100))
 
 
 def get_daily_candles(sym, count=5):
+    print(f"  [{sym}] Fetching data...")
     try:
         params = {"count": count, "granularity": "D", "price": "M"}
         r = instruments.InstrumentsCandles(instrument=sym, params=params)
@@ -70,7 +69,9 @@ def get_daily_candles(sym, count=5):
         df = pd.DataFrame(r.response["candles"])
         df["h"] = df["mid"].apply(lambda x: float(x["h"]))
         df["l"] = df["mid"].apply(lambda x: float(x["l"]))
-        return df.iloc[::-1].reset_index(drop=True)
+        results = df.iloc[::-1].reset_index(drop=True)
+        print(f"  [{sym}] Data fetch complete.\n{results}")
+        return results
     except Exception as e:
         print(f"  [{sym}] Data fetch error: {e}")
         return pd.DataFrame()
@@ -79,21 +80,20 @@ def get_daily_candles(sym, count=5):
 # --- 5. ATOMIC TASKS (For Threading) ---
 
 
-def task_delete_pending_orders(sym):
-    """Thread-safe function to delete pending orders for one symbol."""
+def task_order_cancellation(order):
+    """Thread-safe function to cancel an order."""
+    time.sleep(0.1)
     try:
-        r = orders.OrderList(ACCOUNT_ID)
-        API.request(r)
-        for order in r.response.get("orders", []):
-            if order["instrument"] == sym and order["type"] in ["STOP", "LIMIT"]:
-                API.request(orders.OrderCancel(ACCOUNT_ID, order["id"]))
-                print(f"  -> [{sym}] Deleted pending order {order['id']}")
+        API.request(orders.OrderCancel(ACCOUNT_ID, order["id"]))
+        print(f"  -> Order {order['id']} cancelled.")
     except Exception as e:
-        print(f"  -> [{sym}] Delete failed: {e}")
+        print(f"  -> Order Cancellation Error: {e}")
 
 
 def task_close_position(pos):
     """Thread-safe function to close a single position."""
+    time.sleep(0.1)
+    print(f"  [{pos.get('instrument')}] Closing position...")
     try:
         sym = pos["instrument"]
         long_units = pos.get("long", {}).get("units", "0")
@@ -104,7 +104,7 @@ def task_close_position(pos):
             close_data["longUnits"] = "ALL"
         if short_units != "0":
             close_data["shortUnits"] = "ALL"
-
+        print(f"  -> [{sym}] Close data: {close_data}")
         if close_data:
             API.request(positions.PositionClose(ACCOUNT_ID, sym, data=close_data))
             print(f"  -> [{sym}] Closed position.")
@@ -112,13 +112,10 @@ def task_close_position(pos):
         print(f"  -> [{pos.get('instrument')}] Close failed: {e}")
 
 
-def task_process_nr4(sym):
+def task_process_nr4(args):
     """Thread-safe function to run strategy for one symbol."""
+    sym, equity = args
     print(f"  [{sym}] Scanning...")
-
-    # 1. Ensure clean slate for this symbol first
-    task_delete_pending_orders(sym)
-
     # 2. Get Data
     df = get_daily_candles(sym, count=5)
     if len(df) < 5:
@@ -144,7 +141,7 @@ def task_process_nr4(sym):
     buy_trigger = nr4_high + buffer
     sell_trigger = nr4_low - buffer
 
-    volume = calculate_lot_size(sym)
+    volume = calculate_lot_size_from_equity(equity)
     gtd_time = get_current_gtd_time()
 
     if volume > 0:
@@ -177,31 +174,25 @@ def task_process_nr4(sym):
 # --- 6. PARALLEL EXECUTION MANAGERS ---
 
 
-def check_time_exits():
-    """Manages 23:00 UTC cleanup with MAX CONCURRENCY."""
-    global pending_orders_deleted_today
-    now = datetime.now(pytz.utc)
-
-    if now.hour < CLOSE_HOUR:
-        return
-
-    # A. Parallel Pending Order Cleanup (Once at 23:00)
-    if not pending_orders_deleted_today:
-        print("\n[23:00 UTC] Closing Hour. Parallel Cleanup started.")
+def exit_everything():
+    try:
+        r = orders.OrderList(ACCOUNT_ID)
+        API.request(r)
+        print(f"  -> Found {len(r.response.get('orders', []))} pending orders.")
+        order_list = r.response.get("orders", [])
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(task_delete_pending_orders, TRADE_PAIRS)
-        pending_orders_deleted_today = True
+            executor.map(task_order_cancellation, order_list)
+    except Exception as e:
+        print(f"  -> Delete failed: {e}")
 
     # B. Parallel Position Closing
     try:
+        print("[23:00 UTC] Closing Positions...")
         r = positions.OpenPositions(ACCOUNT_ID)
         API.request(r)
         open_positions = r.response.get("positions", [])
-
+        print(f"  -> Found {len(open_positions)} open positions.")
         if open_positions:
-            print(
-                f"  -> Found {len(open_positions)} open positions. Closing in parallel..."
-            )
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 executor.map(task_close_position, open_positions)
 
@@ -211,34 +202,29 @@ def check_time_exits():
 
 def run_daily_entry_logic():
     """Runs the strategy scan for all pairs simultaneously."""
+    global last_process_day
     print("\n[--- STARTING DAILY SCAN (PARALLEL) ---]")
 
     # This launches 3 threads at once. Total time = time of slowest pair (~0.5s total)
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        executor.map(task_process_nr4, TRADE_PAIRS)
-
-    print("[DAILY SCAN COMPLETE]")
-
-
-def wait_for_new_day_via_stream(target_date_str):
-    """Blocks until the first tick of the next UTC day."""
-    print(f"\n[STREAM] Current datetime:{datetime.now(pytz.utc)} Waiting for first tick of {target_date_str}...")
-
-    # Stream one pair to act as the clock
-    r = pricing.PricingStream(
-        accountID=ACCOUNT_ID, params={"instruments": TRADE_PAIRS[0]}
-    )
     try:
-        for tick in API.request(r):
-            if tick.get("type") == "PRICE":
-                tick_date = tick.get("time", "").split("T")[0]
-                if tick_date == target_date_str:
-                    r.terminate("New day")
-                    return True
-    except Exception as e:
-        print(f"Stream Error: {e}")
-        return False
-    return False
+        exit_everything()
+        # 2. Get Equity ONCE (Saves API calls)
+        r = accounts.AccountSummary(ACCOUNT_ID)
+        API.request(r)
+        equity = float(r.response["account"]["NAV"])
+        print(f"  [Account] Current Equity: {equity}")
+
+        # 3. Prepare arguments for threads: [('GBP_JPY', 10000), ('USD_JPY', 10000)...]
+        task_args = [(pair, equity) for pair in TRADE_PAIRS]
+
+        # 4. Run Threads
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            executor.map(task_process_nr4, task_args)
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     executor.map(task_process_nr4, TRADE_PAIRS)
+    finally:
+        last_process_day = datetime.now(pytz.utc).date()
+    print("[DAILY SCAN COMPLETE]")
 
 
 # --- 7. MAIN LOOP ---
@@ -246,32 +232,30 @@ def wait_for_new_day_via_stream(target_date_str):
 
 def continuous_monitor():
     global pending_orders_deleted_today
-    print(
-        f"Bot Started. Monitoring for {CLOSE_HOUR}:00 Exit and {START_STREAM_HOUR}:{START_STREAM_MINUTE} Entry."
-    )
+    print("Bot Started.")
 
     while True:
         try:
             now = datetime.now(pytz.utc)
 
             # 1. EXIT LOGIC (Runs 23:00 - 23:55 UTC)
-            check_time_exits()
+            # exit_everything()
 
-            # 2. ENTRY LOGIC (Triggers exactly at 23:55 UTC)
-            if now.hour == START_STREAM_HOUR and now.minute == START_STREAM_MINUTE:
-                tomorrow_date_obj = now + timedelta(days=1)
-                target_date_str = tomorrow_date_obj.strftime('%Y-%m-%d')
+            # 2. ENTRY LOGIC (Triggers exactly at 22:00 UTC)
+            if (
+                last_process_day < now.date()
+                and now.hour >= START_STREAM_HOUR
+                and now.hour < START_STREAM_HOUR + 1
+            ):
                 # Wait for 00:00:00 tick
-                if wait_for_new_day_via_stream(target_date_str):
-                    # Run Strategy in Parallel
-                    run_daily_entry_logic()
+                run_daily_entry_logic()
 
-                    # Reset cleanup flag for the new day
-                    pending_orders_deleted_today = False
+                # Reset cleanup flag for the new day
+                # pending_orders_deleted_today = False
 
-                    # Sleep 5 mins to jump past the trigger window
-                    print("Entry complete. Sleeping for 10 minutes...")
-                    time.sleep(600)
+                # Sleep 5 mins to jump past the trigger window
+                print("Entry complete. Sleeping for 10 minutes...")
+                time.sleep(600)
 
             # 3. Idle Sleep
             time.sleep(60)
@@ -288,7 +272,7 @@ if __name__ == "__main__":
     continuous_monitor()
     # start_time = time.time()
     # # run_daily_entry_logic()
-    # check_time_exits()
+    # exit_everything()
     # end_time = time.time()
     # elapsed_time = end_time - start_time
     # print(f"Total Execution Time: {elapsed_time} seconds")
