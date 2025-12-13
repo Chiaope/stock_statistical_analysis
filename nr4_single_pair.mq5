@@ -11,11 +11,11 @@
 
 // --- INPUTS ---
 // Note: LevPerPair replaces TotalLeverage since we are now isolated per chart
-input double   LevPerPair     = 2.0;      // Leverage Allocation for THIS pair (e.g., 2.0 = 2x equity)
+input double   LevPerPair     = 4.0;      // Leverage Allocation for THIS pair (e.g., 2.0 = 2x equity)
 input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input int      HoldDays       = 1;        // Days to Hold
 input int      MagicNumber    = 888888;   // Unique ID
-input int      StartHour      = 0;        // Server Hour to Start
+input int      StartHour      = 2;        // Server Hour to Start
 input int      StartMinute    = 5;        // Server Minute to Start
 input int      CloseHour      = 23;       // Server Hour to Force Close (Exit Only)
 input int      CloseMinute    = 55;       // Server Minute to Force Close (Exit Only)
@@ -131,15 +131,15 @@ void ProcessStrategy()
            {
             Print("Buy Stop Error: ", trade.ResultRetcode(), " Desc: ", trade.ResultRetcodeDescription());
            }
-        //  // Send Sell Stop Order
-        //  if(trade.SellStop(vol, sellTrigger, mySymbol, sellTrigger + stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd))
-        //    {
-        //     Print("Sell Stop Placed on ", mySymbol);
-        //    }
-        //  else
-        //    {
-        //     Print("Sell Stop Error: ", trade.ResultRetcode(), " Desc: ", trade.ResultRetcodeDescription());
-        //    }
+        // Send Sell Stop Order
+        if(trade.SellStop(vol, sellTrigger, mySymbol, sellTrigger + stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd))
+          {
+           Print("Sell Stop Placed on ", mySymbol);
+          }
+        else
+          {
+           Print("Sell Stop Error: ", trade.ResultRetcode(), " Desc: ", trade.ResultRetcodeDescription());
+          }
         }
      }
   }
