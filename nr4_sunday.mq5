@@ -13,6 +13,7 @@
 input double   LevPerPair     = 4.0;      // Leverage Allocation for THIS pair
 input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input string   direction      = "both";   // Direction to place order ("long", "short", "both")
+input bool     BrokerMergesCandles = true; // Set to TRUE if broker has no Sunday candle
 input int      HoldDays       = 1;        // Days to Hold
 input int      StartHour      = 2;        // Server Hour to Start
 input int      StartMinute    = 5;        // Server Minute to Start
@@ -114,48 +115,65 @@ void SetRobustFillingMode()
 
 void ProcessStrategy()
 {
-   // Ensure we have enough history
    if(SeriesInfoInteger(mySymbol, PERIOD_D1, SERIES_BARS_COUNT) < 20) return;
 
    double high[], low[];
    ArraySetAsSeries(high, true);
    ArraySetAsSeries(low, true);
    
-   // CopyHigh(..., 1, 5) gets indices 1, 2, 3, 4, 5.
-   // If Today is Monday (Index 0):
-   // Index 1 = Sunday
-   // Index 2 = Friday
-   // Index 3 = Thursday
-   // Index 4 = Wednesday
-   if(CopyHigh(mySymbol, PERIOD_D1, 1, 5, high) < 5 || CopyLow(mySymbol, PERIOD_D1, 1, 5, low) < 5) return;
+   // We copy 5 bars. 
+   // If Merged: We need Index 0 (Current) + 1,2,3 (Fri, Thu, Wed)
+   // If Distinct: We need Index 1 (Sun) + 2,3,4 (Fri, Thu, Wed)
+   if(CopyHigh(mySymbol, PERIOD_D1, 0, 6, high) < 6 || CopyLow(mySymbol, PERIOD_D1, 0, 6, low) < 6) return;
 
-   // NR4 Logic
-   double r1 = high[0] - low[0]; // Sunday Range
-   double r2 = high[1] - low[1]; // Friday Range
-   double r3 = high[2] - low[2]; // Thursday Range
-   double r4 = high[3] - low[3]; // Wednesday Range
+   double r1, r2, r3, r4;
+   double sundayHigh, sundayLow;
 
-   // Is Sunday the narrowest of the last 4?
+   if (BrokerMergesCandles)
+   {
+      // --- LOGIC FOR MERGED BROKERS ---
+      // We assume "Sunday" is the range formed from Market Open until NOW (Index 0)
+      r1 = high[0] - low[0]; // Current incomplete bar (Sunday/Early Mon)
+      r2 = high[1] - low[1]; // Friday
+      r3 = high[2] - low[2]; // Thursday
+      r4 = high[3] - low[3]; // Wednesday
+      
+      sundayHigh = high[0];
+      sundayLow  = low[0];
+      Print("Merged Mode: Checking Current Range (Index 0) vs Fri/Thu/Wed");
+   }
+   else
+   {
+      // --- LOGIC FOR NON-MERGED BROKERS ---
+      // We look at the closed bars starting from Index 1
+      r1 = high[1] - low[1]; // Sunday (Closed)
+      r2 = high[2] - low[2]; // Friday
+      r3 = high[3] - low[3]; // Thursday
+      r4 = high[4] - low[4]; // Wednesday
+      
+      sundayHigh = high[1];
+      sundayLow  = low[1];
+      Print("Standard Mode: Checking Closed Range (Index 1) vs Fri/Thu/Wed");
+   }
+
+   // NR4 Calculation
    if(r1 < r2 && r1 < r3 && r1 < r4)
    {
-      Print("NR4 Pattern Detected on ", mySymbol, " (Sunday Candle)");
+      Print("NR4 Pattern Detected! Range: ", r1);
       
       double point = SymbolInfoDouble(mySymbol, SYMBOL_POINT);
       double buffer = PipsBuffer * point; 
-      double buyTrigger = high[0] + buffer; // Buy above Sunday High
-      double sellTrigger = low[0] - buffer; // Sell below Sunday Low
       
-      // Stop Loss Logic
+      double buyTrigger  = sundayHigh + buffer;
+      double sellTrigger = sundayLow - buffer;
+      
+      // Stop Loss Logic (ATR)
       double atrVal[1];
       if(CopyBuffer(atrHandle, 0, 1, 1, atrVal) < 1) return;
       double stopDist = atrVal[0] * ATR_Multiplier;
       
       double vol = CalculateLotSize();
-      if(vol <= 0) 
-      {
-         Print("Error: Lot Size calculated as 0.");
-         return;
-      }
+      if(vol <= 0) return;
 
       datetime dayStart = iTime(mySymbol, PERIOD_D1, 0);
       datetime dayEnd = dayStart + 86400 - 60; 
@@ -164,18 +182,23 @@ void ProcessStrategy()
       if (direction == "both" || direction == "long") 
       {
          if(!trade.BuyStop(vol, buyTrigger, mySymbol, buyTrigger - stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd))
-            Print("Buy Stop Failed: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription());
+            Print("Buy Stop Failed: ", trade.ResultRetcode());
          else
             Print("Buy Stop Placed at ", buyTrigger);
       }
+      
       // --- SELL LOGIC ---
       if (direction == "both" || direction == "short")
       {
          if(!trade.SellStop(vol, sellTrigger, mySymbol, sellTrigger + stopDist, 0, ORDER_TIME_SPECIFIED, dayEnd))
-            Print("Sell Stop Failed: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription());
+            Print("Sell Stop Failed: ", trade.ResultRetcode());
          else
             Print("Sell Stop Placed at ", sellTrigger);
       }
+   }
+   else
+   {
+       Print("No NR4. R1:", r1, " R2:", r2, " R3:", r3, " R4:", r4);
    }
 }
 
