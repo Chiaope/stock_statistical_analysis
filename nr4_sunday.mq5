@@ -21,6 +21,8 @@ input int      CloseHour      = 23;       // Server Hour to Force Close (Exit On
 input int      CloseMinute    = 55;       // Server Minute to Force Close (Exit Only)
 input int      PipsBuffer     = 20;       // Pips buffer
 input int      MagicNumber    = 999999;   // Unique ID (Changed slightly for safety)
+input bool     EnablePush       = true;  // Enable phone notifications
+input int      NotifyHour       = 8;     // Server hour to send daily heartbeat (0-23)
 
 // --- GLOBALS ---
 CTrade          trade;
@@ -32,6 +34,12 @@ int OnInit()
   {
    mySymbol = _Symbol; 
    lastProcessedDay = iTime(mySymbol, PERIOD_D1, 0);
+   
+   // 1. Confirm VPS Startup
+   if(EnablePush) {
+      string host = MQLInfoInteger(MQL_TESTER) ? "Tester" : "Live/VPS";
+      SendNotification("🚀 EA Started on " + host + ". Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
+   }
    
    // Create ATR Handle
    atrHandle = iATR(mySymbol, PERIOD_D1, 14);
@@ -57,10 +65,47 @@ void OnTick()
   {
    // 1. Check Time Exit (Runs every tick to manage open positions)
    CheckTimeExits();
+   
+   // --- HEARTBEAT LOGIC START ---
+   static datetime lastNotifyTime = 0;
+   datetime currentTime = TimeCurrent();
+   
+   // 1. Spam protection: Ensure we haven't notified in the last hour
+   // (Safety mechanism to prevent draining phone battery if logic fails)
+   if(EnablePush && (currentTime - lastNotifyTime) > 3600) 
+   {
+      MqlDateTime dt;
+      TimeToStruct(currentTime, dt);
+
+      // 2. Check if it is the target hour (e.g., 08:00 AM)
+      if(dt.hour == NotifyHour) 
+      {
+         string msg = "🟢 It is Monday. Strategy is SCANNING...";
+         
+         // Custom Message for Monday (Your Trading Day)
+         if(dt.day_of_week == 1) { 
+            msg = "🟢 It is Monday. Strategy is SCANNING. Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
+         }
+         // Optional: Message for other days (to confirm it's still alive but sleeping)
+         else {
+            msg = "💤 EA Alive (Standby Mode). Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
+         }
+         
+         // 1. Try to send to phone (Works on Live/VPS only)
+         if(SendNotification(msg)) {
+             lastNotifyTime = currentTime; 
+         }
+         // 2. Force a Print for Backtesting (So you can see it in the Journal)
+         else if(MQLInfoInteger(MQL_TESTER)) {
+             Print("✅ [TESTER-ONLY] Notification would be sent now: ", msg);
+             lastNotifyTime = currentTime; // Update time so it doesn't loop forever in tester
+         }
+      }
+   }
+   // --- HEARTBEAT LOGIC END ---
 
    // 2. Entry Logic: Run ONLY when a new Daily Bar appears
    datetime currentBarDate = iTime(mySymbol, PERIOD_D1, 0);
-   datetime currentTime = TimeCurrent();
    
    // Structs to check hours and day of week
    MqlDateTime dt;
@@ -255,23 +300,58 @@ double CalculateLotSize()
    
    if(contractSize == 0 || price == 0) return 0;
 
+   // Get Symbol Calculation Mode
    ENUM_SYMBOL_CALC_MODE calcMode = (ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(mySymbol, SYMBOL_TRADE_CALC_MODE);
    string symbolUpper = mySymbol;
    StringToUpper(symbolUpper);
 
+   bool useCFDFormula = false;
+
+   // --- STEP 1: CHECK IF IT IS DEFINITELY FOREX ---
+   // If the broker says it's Forex, we trust them. This fixes GBPJPY, EURUSD, etc.
+   if (calcMode == SYMBOL_CALC_MODE_FOREX || calcMode == SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE)
+   {
+      useCFDFormula = false;
+   }
+   // --- STEP 2: CHECK IF IT IS DEFINITELY CFD/INDEX ---
+   else if (calcMode == SYMBOL_CALC_MODE_CFD || calcMode == SYMBOL_CALC_MODE_CFDINDEX || calcMode == SYMBOL_CALC_MODE_FUTURES)
+   {
+      useCFDFormula = true;
+   }
+   // --- STEP 3: FALLBACK STRING DETECTION (For poorly configured brokers) ---
+   // Only run this if we aren't sure yet.
+   else 
+   {
+      // Stricter checks: "JP225" instead of "JP", "US30" instead of "US"
+      if (StringFind(symbolUpper, "XAU") >= 0 || StringFind(symbolUpper, "GOLD") >= 0 || 
+          StringFind(symbolUpper, "US30") >= 0 || StringFind(symbolUpper, "NAS") >= 0 ||
+          StringFind(symbolUpper, "NDX") >= 0  || StringFind(symbolUpper, "JP225") >= 0 ||
+          StringFind(symbolUpper, "GER") >= 0  || StringFind(symbolUpper, "DAX") >= 0)
+      {
+         useCFDFormula = true;
+      }
+   }
+
    double vol = 0;
 
-   if (StringFind(symbolUpper, "XAU") >= 0 || StringFind(symbolUpper, "GOLD") >= 0 || 
-       StringFind(symbolUpper, "US30") >= 0 || StringFind(symbolUpper, "JP225") >= 0 ||
-       calcMode == SYMBOL_CALC_MODE_CFD || calcMode == SYMBOL_CALC_MODE_CFDINDEX)
+   if (useCFDFormula)
    {
+      // CFD Math (Indices/Gold): Exposure / (Contract * Price)
+      // e.g. NAS100: 20k / (1 * 18000) = 1.11 Lots
+      Print("Using CFD formula");
+      Print(contractSize);
       vol = targetExposure / (contractSize * price);
    }
    else
    {
+      // Forex Math (GBPJPY): Exposure / Contract
+      // e.g. GBPJPY: 20k / 100000 = 0.20 Lots
+      Print("Using FX formula");
+      Print(contractSize);
       vol = targetExposure / contractSize;
    }
       
+   // --- NORMALIZE VOLUME ---
    double step = SymbolInfoDouble(mySymbol, SYMBOL_VOLUME_STEP);
    double min  = SymbolInfoDouble(mySymbol, SYMBOL_VOLUME_MIN);
    double max  = SymbolInfoDouble(mySymbol, SYMBOL_VOLUME_MAX);
