@@ -38,7 +38,7 @@ int OnInit()
    // 1. Confirm VPS Startup
    if(EnablePush) {
       string host = MQLInfoInteger(MQL_TESTER) ? "Tester" : "Live/VPS";
-      SendNotification("🚀 EA Started on " + host + ". Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
+      SendNotification(StringFormat("🚀 EA Started on %s. Magic: %d. Balance: %.2f", host, MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE)));
    }
    
    // Create ATR Handle
@@ -80,25 +80,26 @@ void OnTick()
       // 2. Check if it is the target hour (e.g., 08:00 AM)
       if(dt.hour == NotifyHour) 
       {
-         string msg = "🟢 It is Monday. Strategy is SCANNING...";
+         string msg = "";
          
-         // Custom Message for Monday (Your Trading Day)
+         // 1. Construct Message with StringFormat
          if(dt.day_of_week == 1) { 
-            msg = "🟢 It is Monday. Strategy is SCANNING. Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
+            // Monday Message
+            msg = StringFormat("🟢 Mon. Magic: %d. SCANNING. Bal: %.2f", MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE));
          }
-         // Optional: Message for other days (to confirm it's still alive but sleeping)
          else {
-            msg = "💤 EA Alive (Standby Mode). Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
+            // Standby Message
+            msg = StringFormat("💤 Alive. Magic: %d. Standby. Bal: %.2f", MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE));
          }
          
-         // 1. Try to send to phone (Works on Live/VPS only)
+         // 2. Send or Print (Your Code)
          if(SendNotification(msg)) {
-             lastNotifyTime = currentTime; 
+            lastNotifyTime = currentTime; 
          }
-         // 2. Force a Print for Backtesting (So you can see it in the Journal)
          else if(MQLInfoInteger(MQL_TESTER)) {
-             Print("✅ [TESTER-ONLY] Notification would be sent now: ", msg);
-             lastNotifyTime = currentTime; // Update time so it doesn't loop forever in tester
+            // This prints to the Journal tab in Strategy Tester
+            Print("✅ [TESTER-ONLY] ", msg);
+            lastNotifyTime = currentTime; 
          }
       }
    }
