@@ -11,16 +11,16 @@
 
 // --- INPUTS ---
 // Note: LevPerPair replaces TotalLeverage since we are now isolated per chart
-input int      NR_Period      = 4;        // Number of NR periods
 input double   LevPerPair     = 4.0;      // Leverage Allocation for THIS pair (e.g., 2.0 = 2x equity)
+input int      NR_Period      = 4;        // Number of NR periods
 input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
+input double   Entry_ATR_Buffer     = 0.2;       // Entry ATR Buffer
 input string   direction = "both"; // Direction to place order
 input int      HoldDays       = 1;        // Days to Hold
 input int      StartHour      = 2;        // Server Hour to Start
 input int      StartMinute    = 5;        // Server Minute to Start
 input int      CloseHour      = 23;       // Server Hour to Force Close (Exit Only)
 input int      CloseMinute    = 55;       // Server Minute to Force Close (Exit Only)
-input double   Entry_ATR_Buffer     = 20;       // Entry ATR Buffer
 input int      MagicNumber    = 888888;   // Unique ID
 input bool     EnablePush       = true;  // Enable phone notifications
 input int      NotifyHour       = 8;     // Server hour to send daily heartbeat (0-23)
