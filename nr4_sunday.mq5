@@ -162,7 +162,12 @@ void SetRobustFillingMode()
 void ProcessStrategy()
 {
    if(SeriesInfoInteger(mySymbol, PERIOD_D1, SERIES_BARS_COUNT) < 20) return;
-
+   
+   if(EnablePush) {
+      string host = MQLInfoInteger(MQL_TESTER) ? "Tester" : "Live/VPS";
+      SendNotification(StringFormat("🚀 Bot started processing %s. Magic: %d. Balance: %.2f", host, MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE)));
+   }
+   
    double high[], low[];
    ArraySetAsSeries(high, true);
    ArraySetAsSeries(low, true);
