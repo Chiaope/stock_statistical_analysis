@@ -1,50 +1,56 @@
 //+------------------------------------------------------------------+
-//|                                     NR4_SinglePair_MT5.mq5       |
-//|               Single-Currency NR4 Strategy (SL & TP Exit)        |
-//|                              Copyright 2025, Risk Analyst        |
+//|                                        NR4_MultiTF_MT5.mq5       |
+//|               Multi-Timeframe NR4 Strategy (SL & TP Exit)        |
+//|                       Copyright 2025, Risk Analyst               |
 //+------------------------------------------------------------------+
 #property copyright "Risk Analyst"
-#property version   "2.10" // Version bumped for SL/TP update
+#property version   "3.00" // Version bumped for Timeframe Input
 #property strict
 
 #include <Trade\Trade.mqh>
 
 // --- INPUTS ---
-input double    LevPerPair     = 4.0;      // Leverage Allocation for THIS pair
-input int       NR_Period      = 4;        // Number of NR periods
-input double    ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
-input double    TP_Multiplier  = 5.0;      // Take Profit Width (x ATR) <-- NEW INPUT
-input double    Entry_ATR_Buffer     = 0.2;        // Entry ATR Buffer
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_D1;    // Strategy Timeframe (D1, H4, H1, etc.)
+input double    LevPerPair       = 4.0;       // Leverage Allocation for THIS pair
+input int       NR_Period        = 4;         // Number of NR periods
+input double    ATR_Multiplier   = 5.0;       // Stop Loss Width (x ATR)
+input double    TP_Multiplier    = 5.0;       // Take Profit Width (x ATR)
+input double    Entry_ATR_Buffer     = 0.2;         // Entry ATR Buffer
 input string    direction = "both"; // Direction to place order
 input int       Max_Spread_Points = 30;  // Max allowed spread in Points
-input int       StartHour      = 2;        // Server Hour to Start
-input int       StartMinute    = 5;        // Server Minute to Start
-// REMOVED: CloseHour, CloseMinute, HoldDays (No longer needed)
 
-input int       MagicNumber    = 888888;   // Unique ID
-input bool      EnablePush        = true;  // Enable phone notifications
-input int       NotifyHour        = 8;     // Server hour to send daily heartbeat (0-23)
+// TIME FILTER (Critical for H4/H1)
+// If you want to trade EVERY H4 candle, set StartHour to -1. 
+// If you only want to trade the London Open H4 candle, set StartHour to 8.
+input int       StartHour       = 2;         // Server Hour to Start (-1 to disable)
+input int       StartMinute     = 5;         // Server Minute to Start
+
+input int       MagicNumber     = 888888;    // Unique ID
+input bool      EnablePush         = true;  // Enable phone notifications
+input int       NotifyHour         = 8;      // Server hour to send daily heartbeat (0-23)
 
 
 // --- GLOBALS ---
 CTrade          trade;
-datetime        lastProcessedDay = 0;
+datetime        lastProcessedBarTime = 0; // Renamed to track Bars, not just Days
 string          mySymbol; 
 int             atrHandle;
 
 int OnInit()
   {
    mySymbol = _Symbol; 
-   lastProcessedDay = iTime(mySymbol, PERIOD_D1, 0);
+   // Reset the last bar time to avoid immediate execution on old data
+   lastProcessedBarTime = iTime(mySymbol, InpTimeframe, 0);
 
    // 1. Confirm VPS Startup
    if(EnablePush) {
       string host = MQLInfoInteger(MQL_TESTER) ? "Tester" : "Live/VPS";
-      SendNotification(StringFormat("🚀 EA Started on %s. Magic: %d. Balance: %.2f", host, MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE)));
+      string tfName = EnumToString(InpTimeframe);
+      SendNotification(StringFormat("🚀 EA Started on %s [%s]. Magic: %d. Balance: %.2f", host, tfName, MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE)));
    }
    
-   // Create ATR Handle
-   atrHandle = iATR(mySymbol, PERIOD_D1, 14);
+   // 2. Create ATR Handle with CUSTOM TIMEFRAME
+   atrHandle = iATR(mySymbol, InpTimeframe, 14);
    if(atrHandle == INVALID_HANDLE)
      {
       Print("Error creating ATR indicator handle for ", mySymbol);
@@ -54,7 +60,7 @@ int OnInit()
    trade.SetExpertMagicNumber(MagicNumber);
    SetRobustFillingMode();
    
-   Print("NR4 Single-Pair EA Initialized for: ", mySymbol);
+   Print("NR4 Multi-TF EA Initialized for: ", mySymbol, " on ", EnumToString(InpTimeframe));
    return(INIT_SUCCEEDED);
   }
 
@@ -93,23 +99,28 @@ void OnTick()
    int currentSpread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
    if(currentSpread > Max_Spread_Points) return; 
    
-   // REMOVED: CheckTimeExits() call
-
-   // 2. Entry Logic: Run ONLY when a new Daily Bar appears
-   datetime currentBarDate = iTime(mySymbol, PERIOD_D1, 0);
+   // 2. Entry Logic: Run ONLY when a new BAR appears on the selected TIMEFRAME
+   datetime currentBarDate = iTime(mySymbol, InpTimeframe, 0);
    MqlDateTime dt;
    TimeToStruct(currentTime, dt);
 
-   if(currentBarDate != lastProcessedDay && dt.hour == StartHour && dt.min >= StartMinute)
+   // Check if it's a new bar
+   if(currentBarDate != lastProcessedBarTime)
      {
-      // Clean slate first (Delete yesterday's untriggered pending orders)
+      // Optional: Time Filter Check
+      // If StartHour is -1, we ignore time and trade every new bar.
+      // If StartHour is set (e.g., 2), we only trade if the current time matches.
+      if(StartHour >= 0 && dt.hour != StartHour) return;
+      if(StartHour >= 0 && dt.min < StartMinute) return;
+
+      // Clean slate first (Delete old pending orders from previous bar)
       DeletePendingOrders();
        
       // Run Strategy
       ProcessStrategy();
        
-      // Mark today as processed
-      lastProcessedDay = currentBarDate;
+      // Mark this bar as processed
+      lastProcessedBarTime = currentBarDate;
      }
   }
 
@@ -123,19 +134,21 @@ void SetRobustFillingMode()
 
 void ProcessStrategy()
 {
-   if(SeriesInfoInteger(mySymbol, PERIOD_D1, SERIES_BARS_COUNT) < NR_Period + 5) return;
+   // Check if we have enough bars on the SELECTED timeframe
+   if(SeriesInfoInteger(mySymbol, InpTimeframe, SERIES_BARS_COUNT) < NR_Period + 5) return;
 
    if(EnablePush) {
       string host = MQLInfoInteger(MQL_TESTER) ? "Tester" : "Live/VPS";
-      SendNotification(StringFormat("🚀 Bot started processing %s. Magic: %d. Balance: %.2f", host, MagicNumber, AccountInfoDouble(ACCOUNT_BALANCE)));
+      SendNotification(StringFormat("🚀 Bot processing new bar on %s. Balance: %.2f", EnumToString(InpTimeframe), AccountInfoDouble(ACCOUNT_BALANCE)));
    }
    
    double high[], low[];
    ArraySetAsSeries(high, true);
    ArraySetAsSeries(low, true);
    
-   if(CopyHigh(mySymbol, PERIOD_D1, 1, NR_Period, high) < NR_Period || 
-      CopyLow(mySymbol, PERIOD_D1, 1, NR_Period, low) < NR_Period) 
+   // COPY DATA FROM SELECTED TIMEFRAME
+   if(CopyHigh(mySymbol, InpTimeframe, 1, NR_Period, high) < NR_Period || 
+      CopyLow(mySymbol, InpTimeframe, 1, NR_Period, low) < NR_Period) 
       return;
       
    double currentRange = high[0] - low[0];
@@ -153,7 +166,7 @@ void ProcessStrategy()
 
    if(isNR)
    {
-      Print("NR4 Pattern Detected on ", mySymbol);
+      Print("NR4 Pattern Detected on ", mySymbol, " ", EnumToString(InpTimeframe));
       
       // --- SL & TP CALCULATIONS ---
       double atrVal[1];
@@ -173,15 +186,14 @@ void ProcessStrategy()
          return;
       }
 
-      // Pending Order Expiration (End of current day)
-      // Note: This only expires the PENDING order, not the active position
+      // Pending Order Expiration (End of current DAY)
+      // Even if trading H4, we usually want the order to expire at midnight.
       datetime dayStart = iTime(mySymbol, PERIOD_D1, 0);
       datetime dayEnd = dayStart + 86400 - 60; 
       
       // --- SMART BUY LOGIC ---
       if (direction == "both" || direction == "long") 
       {
-         // We now pass TP (buyTrigger + tpDist) into the function
          if(!trade.BuyStop(vol, buyTrigger, mySymbol, buyTrigger - stopDist, buyTrigger + tpDist, ORDER_TIME_SPECIFIED, dayEnd))
             Print("Buy Stop Failed: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription());
          else
@@ -191,7 +203,6 @@ void ProcessStrategy()
       // --- SMART SELL LOGIC ---
       if (direction == "both" || direction == "short")
       {
-         // We now pass TP (sellTrigger - tpDist) into the function
          if(!trade.SellStop(vol, sellTrigger, mySymbol, sellTrigger + stopDist, sellTrigger - tpDist, ORDER_TIME_SPECIFIED, dayEnd))
             Print("Sell Stop Failed: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription());
          else
@@ -199,8 +210,6 @@ void ProcessStrategy()
       }
    }
 }
-
-// REMOVED CheckTimeExits() Function
 
 void DeletePendingOrders()
   {
