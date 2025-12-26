@@ -14,6 +14,7 @@ input double   LevPerPair     = 4.0;      // Leverage Allocation for THIS pair
 input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input string   direction      = "both";   // Direction to place order ("long", "short", "both")
 input bool     BrokerMergesCandles = true; // Set to TRUE if broker has no Sunday candle
+input int      Max_Spread_Points = 30;  // Max allowed spread in Points (e.g. 30 = 3 pips)
 input int      HoldDays       = 1;        // Days to Hold
 input int      StartHour      = 2;        // Server Hour to Start
 input int      StartMinute    = 5;        // Server Minute to Start
@@ -63,9 +64,6 @@ void OnDeinit(const int reason)
 
 void OnTick()
   {
-   // 1. Check Time Exit (Runs every tick to manage open positions)
-   CheckTimeExits();
-   
    // --- HEARTBEAT LOGIC START ---
    static datetime lastNotifyTime = 0;
    datetime currentTime = TimeCurrent();
@@ -104,6 +102,20 @@ void OnTick()
       }
    }
    // --- HEARTBEAT LOGIC END ---
+   
+   // Get current spread in points
+   int currentSpread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   
+   // Check if spread exceeds limit
+   if(currentSpread > Max_Spread_Points)
+   {
+      // Optional: Print to journal so you know why it's silent (don't spam this on every tick)
+      // Print("Spread too high: ", currentSpread, " pts. Filter Active.");
+      return; // EXIT FUNCTION IMMEDIATELY
+   }
+   
+   // 1. Check Time Exit
+   CheckTimeExits();
 
    // 2. Entry Logic: Run ONLY when a new Daily Bar appears
    datetime currentBarDate = iTime(mySymbol, PERIOD_D1, 0);
