@@ -17,7 +17,7 @@ input double   ATR_Multiplier = 5.0;      // Stop Loss Width (x ATR)
 input double   Entry_ATR_Buffer     = 0.2;       // Entry ATR Buffer
 input string   direction = "both"; // Direction to place order
 input int      Max_Spread_Points = 30;  // Max allowed spread in Points (e.g. 30 = 3 pips)
-input int      HoldDays       = 1;        // Days to Hold
+input int      MinHoldHours = 12; // Minimum hours to hold
 input int      StartHour      = 2;        // Server Hour to Start
 input int      StartMinute    = 5;        // Server Minute to Start
 input int      CloseHour      = 23;       // Server Hour to Force Close (Exit Only)
@@ -267,34 +267,39 @@ void ProcessStrategy()
 }
 
 void CheckTimeExits()
-  {
+{
    for(int i=PositionsTotal()-1; i>=0; i--)
-     {
+   {
       ulong ticket = PositionGetTicket(i);
       if(PositionSelectByTicket(ticket))
-        {
-         // CRITICAL: Check Symbol match
+      {
+         // 1. Symbol & Magic Check
          if(PositionGetString(POSITION_SYMBOL) == mySymbol && PositionGetInteger(POSITION_MAGIC) == MagicNumber)
-           {
+         {
             datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
             datetime currentTime = TimeCurrent();
             
-            double secondsElapsed = currentTime - openTime;
-            double daysElapsed = secondsElapsed / 86400.0;
-            
+            // 2. MINIMUM DURATION FILTER
+            // Forces late trades to hold overnight, boosting average duration to ~22h
+            double hoursElapsed = (currentTime - openTime) / 3600.0;
+            if(hoursElapsed < MinHoldHours) continue;
+
+            // 3. TARGET EXIT WINDOW (23:55 - 23:59)
             MqlDateTime dt;
             TimeToStruct(currentTime, dt);
-            
-            // Logic: Held for ~1 day AND it is the CloseHour
-            if(daysElapsed >= HoldDays - 0.5 && dt.hour >= CloseHour && dt.min >= CloseMinute)
-              {
+
+            if(dt.hour == CloseHour && dt.min >= CloseMinute)
+            {
+               // Optional: Uncomment to avoid exiting during extreme spreads
+               if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > Max_Spread_Points) continue;
+
                DeletePendingOrders();
                trade.PositionClose(ticket);
-              }
-           }
-        }
-     }
-  }
+            }
+         }
+      }
+   }
+}
 
 void DeletePendingOrders()
   {
