@@ -1,0 +1,32 @@
+{
+    "name": "Python 3",
+    "image": "mcr.microsoft.com/devcontainers/python:2-3.13-bookworm",
+    "features": {
+        "ghcr.io/devcontainers/features/python:1": {
+            "installJupyterlab": true,
+            "version": "latest"
+        },
+        "ghcr.io/devcontainer-community/devcontainer-features/astral.sh-uv:1": {
+            "shellautocompletion": true,
+            "version": "latest"
+        }
+    },
+
+    // Runs automatically right after the container finishes building
+    "postCreateCommand": "uv sync",
+
+    // Automatically links your VS Code and Jupyter to the uv virtual environment
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-toolsai.jupyter",
+                "charliermarsh.ruff"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+                "jupyter.notebookEditor.defaultInterpreter": "${workspaceFolder}/.venv/bin/python"
+            }
+        }
+    }
+}
