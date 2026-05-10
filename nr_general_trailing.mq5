@@ -4,31 +4,32 @@
 //|                        Copyright 2025, Risk Analyst              |
 //+------------------------------------------------------------------+
 #property copyright "Risk Analyst"
-#property version   "3.10" // Version bumped for Trailing Stop
+#property version   "4.0" // Version bumped for Trailing Stop
 #property strict
 
 #include <Trade\Trade.mqh>
 
-// --- INPUTS ---
+input group     "Filter"
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_D1;    // Strategy Timeframe (D1, H4, etc.)
 input double    LevPerPair       = 4.0;       // Leverage Allocation
 input int       NR_Period        = 4;         // Number of NR periods
 input double    ATR_Multiplier   = 5.0;       // Initial Stop Loss Width (x ATR)
 
-// --- TRAILING STOP SETTINGS ---
+input group     "Exit Setting"
 input bool      UseTrailingStop  = true;      // Enable ATR Trailing Stop?
 input double    Trailing_ATR_Mult= 2.0;       // Trailing Distance (x ATR)
 input bool      UseFixedTP       = false;     // Use Fixed TP? (False = Unlimited Run)
 input double    TP_Multiplier    = 5.0;       // Take Profit Width (Used if UseFixedTP=true)
-
+input int       InpOrderExpireHours= 24;      // Pending Order Expiry (Hours)
 input double    Entry_ATR_Buffer = 0.2;       // Entry ATR Buffer
 input string    direction        = "both";    // Direction: "both", "long", "short"
 input int       Max_Spread_Points= 30;        // Max allowed spread in Points
 
-// TIME FILTER
+input group     "Time Filter"
 input int       StartHour        = 2;         // Server Hour to Start (-1 to disable)
 input int       StartMinute      = 5;         // Server Minute to Start
 
+input group     "Notification"
 input int       MagicNumber      = 888888;    // Unique ID
 input bool      EnablePush       = true;      // Enable phone notifications
 input int       NotifyHour       = 8;         // Server hour to send daily heartbeat
@@ -101,7 +102,7 @@ void OnTick()
       if(StartHour >= 0 && dt.hour != StartHour) return;
       if(StartHour >= 0 && dt.min < StartMinute) return;
 
-      DeletePendingOrders(); // Clean up old pending orders
+      // DeletePendingOrders(); // Clean up old pending orders
       ProcessStrategy();     // Look for new NR4 entries
       
       lastProcessedBarTime = currentBarDate;
@@ -206,8 +207,13 @@ void ProcessStrategy()
       
       double vol = CalculateLotSize();
       if(vol <= 0) return;
-
-      datetime dayEnd = iTime(mySymbol, PERIOD_D1, 0) + 86400 - 60; 
+      
+      // datetime dayEnd = iTime(mySymbol, PERIOD_D1, 0) + 86400 - 60;
+      
+      // if (InpOrderExpireHours != 0) {
+      datetime dayEnd = TimeCurrent() + (InpOrderExpireHours * 3600);
+      // }
+      
       
       // BUY SETUP
       if (direction == "both" || direction == "long") 
