@@ -203,13 +203,24 @@ void OnTick() {
    }
 
    // --- 2. OCO & New Bar Checks ---
-   if(PositionsTotal() > 0) {
+   bool hasPosition = false;
+   for(int i=PositionsTotal()-1; i>=0; i--) {
+      if(PositionGetTicket(i) > 0) {
+         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber && PositionGetString(POSITION_SYMBOL) == _Symbol) {
+            hasPosition = true;
+            break;
+         }
+      }
+   }
+   if(hasPosition) {
+      // Delete pending orders if we already have a live position (OCO)
       for(int i=OrdersTotal()-1; i>=0; i--) {
-         if(OrderGetInteger(ORDER_MAGIC)==MagicNumber) trade.OrderDelete(OrderGetTicket(i));
+         if(OrderGetInteger(ORDER_MAGIC) == MagicNumber && OrderGetString(ORDER_SYMBOL) == _Symbol) {
+            trade.OrderDelete(OrderGetTicket(i));
+         }
       }
       return; 
    }
-   //if(OrdersTotal() > 0) return;
 
    static datetime lastBar;
    datetime currentBar = (datetime)SeriesInfoInteger(_Symbol, _Period, SERIES_LASTBAR_DATE);
@@ -267,7 +278,7 @@ void OnTick() {
    int cur = count - 1; 
    double cur_ADX      = buf_adx[cur];
    double cur_ATR_Pct  = (buf_atr[cur] / buf_close[cur]) * 100.0;
-   double cur_ATR_ROC  = (buf_atr[cur] - buf_atr[cur-5]) / buf_atr[cur-5];
+   double cur_ATR_ROC  = (buf_atr[cur] - buf_atr[cur-InpQ_ATR_ROC_Period]) / buf_atr[cur-InpQ_ATR_ROC_Period];
    double cur_Std_Pct  = (buf_std[cur] / buf_ma[cur]) * 100.0;
    
    int cur_shift = 1; 
